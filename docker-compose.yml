@@ -1,0 +1,11 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      DATABASE_URL: sqlite:///./data/search_leads.db
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
