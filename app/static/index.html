@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search Leads — Consola</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --border: #334155; --text: #e2e8f0;
+    --muted: #94a3b8; --accent: #38bdf8; --ok: #4ade80; --warn: #facc15; --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  .grid { display: grid; grid-template-columns: 380px 1fr; gap: 20px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .panel h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 12px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button { cursor: pointer; border: none; border-radius: 8px; padding: 10px 14px; font-size: 14px; font-weight: 600; }
+  .btn-primary { background: var(--accent); color: #082f49; width: 100%; margin-top: 14px; }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); font-size: 12px; padding: 5px 10px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .b-pending { background: #1e3a5f; color: #93c5fd; }
+  .b-running { background: #3b3b1e; color: var(--warn); }
+  .b-done { background: #16381f; color: var(--ok); }
+  .b-failed { background: #3d1717; color: var(--err); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  .kv .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .status-line { font-size: 13px; color: var(--muted); margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  .intent-hot { color: var(--err); font-weight: 700; }
+  .intent-warm { color: var(--warn); font-weight: 700; }
+  .intent-cold { color: var(--muted); }
+  .reviews-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); font-size: 13px; padding: 16px 0; }
+  .usage-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+  .error-banner { background: #3d1717; color: var(--err); padding: 10px 12px; border-radius: 8px; margin: 10px 0; font-size: 13px; white-space: pre-wrap; }
+  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel); border: 1px solid var(--border); padding: 12px 16px; border-radius: 10px; font-size: 13px; box-shadow: 0 4px 20px rgba(0,0,0,.4); display: none; z-index: 99; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .tab { background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  .tab.active { color: var(--accent); border-color: var(--accent); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Search Leads <span class="sub">consola</span></h1>
+  <input id="api-key" style="max-width:260px" placeholder="X-API-Key (dev-key-123)" value="">
+</header>
+
+<div class="container">
+  <div class="tabs">
+    <button class="tab active" data-tab="search">Búsqueda</button>
+    <button class="tab" data-tab="history">Historial</button>
+    <button class="tab" data-tab="usage">Costos</button>
+  </div>
+
+  <!-- BUSQUEDA -->
+  <div id="tab-search" class="grid">
+    <div>
+      <div class="panel">
+        <h2>Nueva búsqueda</h2>
+        <label>Zona</label>
+        <input id="zona" placeholder="Nueva Córdoba" value="Nueva Córdoba">
+        <label>Categoría</label>
+        <input id="categoria" placeholder="gimnasios" value="gimnasios">
+        <div class="row">
+          <div><label>Latitud (radio)</label><input id="lat" placeholder="opcional"></div>
+          <div><label>Longitud (radio)</label><input id="lng" placeholder="opcional"></div>
+        </div>
+        <div class="row">
+          <div><label>Radio (m)</label><input id="radio" placeholder="opcional"></div>
+          <div><label>Min rating</label><input id="min_rating" type="number" step="0.1" min="0" max="5" placeholder="4.3"></div>
+        </div>
+        <div class="row">
+          <div><label>Review reciente (días)</label><input id="max_days" type="number" min="1" max="365" placeholder="90"></div>
+          <div><label>includedType</label><input id="included_type" placeholder="auto"></div>
+        </div>
+        <button class="btn-primary" id="btn-search">Disparar búsqueda</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel" id="status-panel">
+        <h2>Estado de la corrida</h2>
+        <div class="empty" id="status-empty">Dispará una búsqueda para ver el proceso.</div>
+        <div id="status-body" class="hidden">
+          <div class="status-line">id: <span id="s-id" class="muted"></span></div>
+          <div class="status-line">estado: <span id="s-status" class="badge b-pending">pending</span></div>
+          <div class="kv" style="margin-top:10px">
+            <span class="k">Zona</span><span class="v" id="s-zona"></span>
+            <span class="k">Categoría</span><span class="v" id="s-cat"></span>
+            <span class="k">includedType</span><span class="v" id="s-inc"></span>
+            <span class="k">Candidatos (Google)</span><span class="v" id="s-cand"></span>
+            <span class="k">Leads</span><span class="v" id="s-leads"></span>
+            <span class="k">Scored / errores</span><span class="v" id="s-scored"></span>
+            <span class="k">Llamadas baratas / caras</span><span class="v" id="s-calls"></span>
+            <span class="k">Costo estimado</span><span class="v" id="s-cost"></span>
+          </div>
+          <div class="kv" style="margin-top:10px">
+            <span class="k">Desc. por web</span><span class="v" id="s-dweb"></span>
+            <span class="k">Desc. rating</span><span class="v" id="s-drating"></span>
+            <span class="k">Desc. sin review reciente</span><span class="v" id="s-drev"></span>
+            <span class="k">Reusados de caché</span><span class="v" id="s-cache"></span>
+          </div>
+          <div id="s-error" class="error-banner hidden"></div>
+          <div style="margin-top:12px;display:flex;gap:8px">
+            <button class="btn-ghost" id="btn-csv">Exportar CSV</button>
+            <button class="btn-ghost" id="btn-rescore">Re-scoring LLM</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:16px">
+        <h2>Leads encontrados</h2>
+        <div id="leads-table"><div class="empty">Sin resultados aún.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HISTORIAL -->
+  <div id="tab-history" class="panel hidden">
+    <h2>Búsquedas recientes</h2>
+    <div id="history-body"><div class="empty">Cargando…</div></div>
+  </div>
+
+  <!-- COSTOS -->
+  <div id="tab-usage" class="panel hidden">
+    <h2>Consumo mensual vs cupos (Google)</h2>
+    <div id="usage-body"><div class="empty">Cargando…</div></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = "";
+let currentSearchId = null;
+let pollTimer = null;
+
+function key() { return document.getElementById("api-key").value.trim() || "dev-key-123"; }
+function headers() { return { "X-API-Key": key(), "Content-Type": "application/json" }; }
+
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.style.display = "block";
+  setTimeout(() => t.style.display = "none", 3500);
+}
+
+async function req(method, path, body) {
+  const r = await fetch(API + path, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined });
+  const ct = r.headers.get("content-type") || "";
+  const data = ct.includes("json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error(typeof data === "string" ? data : JSON.stringify(data));
+  return data;
+}
+
+function badge(status) {
+  return `<span class="badge b-${status}">${status}</span>`;
+}
+
+// ---- Tabs ----
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  t.classList.add("active");
+  document.querySelectorAll("[id^=tab-]").forEach(x => x.classList.add("hidden"));
+  document.getElementById("tab-" + t.dataset.tab).classList.remove("hidden");
+  if (t.dataset.tab === "history") loadHistory();
+  if (t.dataset.tab === "usage") loadUsage();
+}));
+
+// ---- Disparar búsqueda ----
+document.getElementById("btn-search").addEventListener("click", async () => {
+  const body = {
+    zona: document.getElementById("zona").value,
+    categoria: document.getElementById("categoria").value,
+  };
+  const lat = document.getElementById("lat").value;
+  const lng = document.getElementById("lng").value;
+  const radio = document.getElementById("radio").value;
+  const mr = document.getElementById("min_rating").value;
+  const md = document.getElementById("max_days").value;
+  const it = document.getElementById("included_type").value;
+  if (lat) body.lat = parseFloat(lat);
+  if (lng) body.lng = parseFloat(lng);
+  if (radio) body.radio = parseInt(radio);
+  if (mr) body.min_rating = parseFloat(mr);
+  if (md) body.max_days_since_review = parseInt(md);
+  if (it) body.included_type = it;
+
+  const btn = document.getElementById("btn-search");
+  btn.disabled = true;
+  try {
+    const data = await req("POST", "/api/searches", body);
+    currentSearchId = data.id;
+    showAccepted(data);
+    pollSearch(data.id);
+    toast("Búsqueda encolada: " + data.id);
+  } catch (e) {
+    toast("Error: " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function showAccepted(a) {
+  document.getElementById("status-empty").classList.add("hidden");
+  document.getElementById("status-body").classList.remove("hidden");
+  document.getElementById("s-id").textContent = a.id;
+  document.getElementById("s-zona").textContent = a.zona;
+  document.getElementById("s-cat").textContent = a.categoria;
+  document.getElementById("s-inc").textContent = a.included_type || "(ninguno)";
+  setStatus("pending");
+  ["s-cand","s-leads","s-scored","s-calls","s-cost","s-dweb","s-drating","s-drev","s-cache"].forEach(i => document.getElementById(i).textContent = "—");
+  document.getElementById("s-error").classList.add("hidden");
+  document.getElementById("leads-table").innerHTML = '<div class="empty">Procesando…</div>';
+}
+
+function setStatus(st) {
+  const el = document.getElementById("s-status");
+  el.textContent = st;
+  el.className = "badge b-" + st;
+}
+
+// ---- Polling ----
+function pollSearch(id) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const s = await req("GET", "/api/searches/" + id);
+      renderStatus(s);
+      if (s.status === "done" || s.status === "failed") {
+        clearInterval(pollTimer);
+        if (s.status === "done") await loadLeads(id);
+      }
+    } catch (e) { /* sigue polliando */ }
+  }, 2500);
+}
+
+function renderStatus(s) {
+  setStatus(s.status);
+  document.getElementById("s-cand").textContent = s.total_candidates;
+  document.getElementById("s-leads").textContent = s.total_leads;
+  document.getElementById("s-scored").textContent = s.scored_leads + " / " + s.score_errors;
+  document.getElementById("s-calls").textContent = s.calls_cheap + " / " + s.calls_expensive;
+  document.getElementById("s-cost").textContent = "$" + s.est_cost_usd;
+  document.getElementById("s-dweb").textContent = s.discarded_has_website;
+  document.getElementById("s-drating").textContent = s.discarded_low_rating;
+  document.getElementById("s-drev").textContent = s.discarded_no_recent_review;
+  document.getElementById("s-cache").textContent = s.reused_from_cache;
+  const err = document.getElementById("s-error");
+  if (s.error) { err.textContent = s.error; err.classList.remove("hidden"); }
+  else err.classList.add("hidden");
+}
+
+// ---- Leads ----
+async function loadLeads(id) {
+  try {
+    const leads = await req("GET", `/api/searches/${id}/leads?limit=50`);
+    renderLeads(leads);
+  } catch (e) {
+    document.getElementById("leads-table").innerHTML = `<div class="error-banner">${e.message}</div>`;
+  }
+}
+
+function renderLeads(leads) {
+  const box = document.getElementById("leads-table");
+  if (!leads.length) { box.innerHTML = '<div class="empty">Sin leads (todos descartados por filtros).</div>'; return; }
+  const rows = leads.map(l => `
+    <tr>
+      <td><strong>${esc(l.name)}</strong><br><span class="muted">${esc(l.address || "")}</span></td>
+      <td>${l.rating ?? "—"} <span class="muted">(${l.review_count ?? 0})</span></td>
+      <td>${l.has_website ? "sí" : "no"}</td>
+      <td class="intent-${l.intent}">${l.fit_score ?? "—"} ${l.intent ? l.intent.toUpperCase() : ""}</td>
+      <td>${l.status}</td>
+      <td><details><summary>reviews (${l.reviews.length})</summary><div class="reviews-box">${renderReviews(l)}</div></details></td>
+    </tr>`).join("");
+  box.innerHTML = `<table><thead><tr><th>Negocio</th><th>Rating</th><th>Web</th><th>Score</th><th>CRM</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderReviews(l) {
+  if (!l.reviews.length) return "<span class='muted'>sin reviews observadas</span>";
+  return l.reviews.map(r => {
+    const when = r.publish_time ? r.publish_time.slice(0,10) : "?";
+    return `<div><b>${esc(r.author||"Anónimo")}</b> · ${r.rating}★ · ${when}<br>${esc(r.text||"")}</div>`;
+  }).join("<hr style='border:none;border-top:1px solid var(--border);margin:6px 0'>");
+}
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+
+// ---- Historial ----
+async function loadHistory() {
+  const box = document.getElementById("history-body");
+  try {
+    const list = await req("GET", "/api/searches?limit=15");
+    if (!list.length) { box.innerHTML = '<div class="empty">Sin búsquedas aún.</div>'; return; }
+    box.innerHTML = `<table><thead><tr><th>Fecha</th><th>Zona / Cat</th><th>Estado</th><th>Cand</th><th>Leads</th><th>Cost</th><th></th></tr></thead><tbody>` +
+      list.map(s => `<tr>
+        <td class="muted">${(s.created_at||"").slice(0,16)}</td>
+        <td>${esc(s.zona)} / ${esc(s.categoria)}</td>
+        <td>${badge(s.status)}</td>
+        <td>${s.total_candidates}</td>
+        <td>${s.total_leads}</td>
+        <td>$${s.est_cost_usd}</td>
+        <td><button class="btn-ghost" onclick="window.open('/api/searches/${s.id}/export.csv', '_blank')">CSV</button></td>
+      </tr>`).join("") + `</tbody></table>`;
+  } catch (e) { box.innerHTML = `<div class="error-banner">${e.message}</div>`; }
+}
+
+// ---- Costos ----
+async function loadUsage() {
+  const box = document.getElementById("usage-body");
+  try {
+    const u = await req("GET", "/api/usage");
+    box.innerHTML = `<div class="status-line">Mes: <b>${u.month}</b> · Total: <b>$${u.total_cost}</b></div>` +
+      u.by_sku.map(s => `
+        <div class="usage-row">
+          <span>${s.sku}</span>
+          <span>${s.calls} / ${s.free} usados · exceso ${s.chargeable} · <b>$${s.cost}</b></span>
+        </div>`).join("");
+  } catch (e) { box.innerHTML = `<div class="error-banner">${e.message}</div>`; }
+}
+
+// ---- CSV / Rescore ----
+document.getElementById("btn-csv").addEventListener("click", () => {
+  if (currentSearchId) window.open(`/api/searches/${currentSearchId}/export.csv`, "_blank");
+});
+document.getElementById("btn-rescore").addEventListener("click", async () => {
+  if (!currentSearchId) return;
+  try {
+    await req("POST", `/api/searches/${currentSearchId}/score`);
+    toast("Re-scoring encolado. Esperando…");
+    setTimeout(() => loadLeads(currentSearchId), 6000);
+  } catch (e) { toast("Error: " + e.message); }
+});
+</script>
+</body>
+</html>

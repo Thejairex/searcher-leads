@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 import json
+from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Query
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, FileResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -37,6 +38,12 @@ app = FastAPI(title="search-leads", version="0.1.0", lifespan=lifespan)
 @app.get("/api/health")
 def health():
     return {"status": "ok", "db": settings.database_url.split("://")[0]}
+
+
+@app.get("/", include_in_schema=False)
+def ui():
+    """Consola web simple para consumir la API."""
+    return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
 @app.post("/api/searches", response_model=SearchAccepted, status_code=202, dependencies=[Depends(verify_api_key)])
