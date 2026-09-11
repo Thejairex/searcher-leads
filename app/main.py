@@ -133,6 +133,40 @@ def list_leads(
     return q.offset(offset).limit(limit).all()
 
 
+@app.get("/api/leads/export.csv", dependencies=[Depends(verify_api_key)])
+def export_leads_csv(
+    db: Session = Depends(get_db),
+    has_website: bool | None = None,
+    min_rating: float | None = None,
+    min_fit_score: int | None = Query(None, ge=0, le=100),
+    intent: str | None = Query(None, pattern="^(hot|warm|cold)$"),
+    status: str | None = Query(None, pattern="^(nuevo|lista_contacto|contactado|descartado|convertido)$"),
+):
+    """Exporta TODOS los leads del pipeline (con filtros) a CSV (UTF-8 BOM).
+
+    Incluye search_id/zona/categoria para rastrear el origen de cada lead.
+    """
+    q = db.query(Lead)
+    if has_website is not None:
+        q = q.filter(Lead.has_website == has_website)
+    if min_rating is not None:
+        q = q.filter(Lead.rating >= min_rating)
+    if min_fit_score is not None:
+        q = q.filter(Lead.fit_score >= min_fit_score)
+    if intent is not None:
+        q = q.filter(Lead.intent == intent)
+    if status is not None:
+        q = q.filter(Lead.status == status)
+    leads = q.order_by(Lead.fit_score.desc().nullslast()).all()
+
+    content = "\ufeff" + _leads_to_csv(leads)
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="leads.csv"'},
+    )
+
+
 @app.get("/api/leads/{place_id}", response_model=LeadOut, dependencies=[Depends(verify_api_key)])
 def get_lead(place_id: str, db: Session = Depends(get_db)):
     lead = db.query(Lead).filter(Lead.place_id == place_id).first()
@@ -236,6 +270,36 @@ def rescore_search(search_id: str, background_tasks: BackgroundTasks, db: Sessio
     return s
 
 
+def _leads_to_csv(leads: list[Lead]) -> str:
+    """Genera el contenido CSV (sin BOM) para una lista de leads."""
+    import csv
+    import io
+
+    header = [
+        "place_id", "search_id", "zona", "categoria", "name", "address", "phone",
+        "rating", "review_count", "has_website", "website_uri", "maps_uri",
+        "last_review_at", "recent_review_detected", "review_activity_confidence",
+        "reviews_returned", "fit_score", "intent", "score_model", "status",
+        "reviews", "reviews_total",
+    ]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    for l in leads:
+        search = l.search
+        review_texts = "; ".join((r.text or "").replace("\n", " ").replace(";", ",") for r in l.reviews if r.text)
+        writer.writerow([
+            l.place_id, l.search_id, search.zona if search else "", search.categoria if search else "",
+            l.name, l.address, l.phone, l.rating, l.review_count,
+            l.has_website, l.website_uri, l.maps_uri,
+            l.last_review_at.isoformat() if l.last_review_at else "",
+            l.recent_review_detected, l.review_activity_confidence, l.reviews_returned,
+            l.fit_score, l.intent, l.score_model, l.status,
+            review_texts, len(l.reviews),
+        ])
+    return buf.getvalue()
+
+
 @app.get("/api/searches/{search_id}/export.csv", dependencies=[Depends(verify_api_key)])
 def export_search_csv(search_id: str, db: Session = Depends(get_db)):
     """Exporta los leads de la corrida a CSV (UTF-8 con BOM para Excel)."""
@@ -243,32 +307,7 @@ def export_search_csv(search_id: str, db: Session = Depends(get_db)):
     if not s:
         raise HTTPException(status_code=404, detail="Search not found")
     leads = db.query(Lead).filter(Lead.search_id == search_id).order_by(Lead.rating.desc().nullslast()).all()
-
-    header = [
-        "place_id", "name", "address", "phone", "rating", "review_count",
-        "has_website", "website_uri", "maps_uri", "last_review_at",
-        "recent_review_detected", "review_activity_confidence", "reviews_returned",
-        "fit_score", "intent", "score_model", "status",
-        "reviews", "reviews_total",
-    ]
-    import csv
-    import io
-
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(header)
-    for l in leads:
-        review_texts = "; ".join((r.text or "").replace("\n", " ").replace(";", ",") for r in l.reviews if r.text)
-        writer.writerow([
-            l.place_id, l.name, l.address, l.phone, l.rating, l.review_count,
-            l.has_website, l.website_uri, l.maps_uri,
-            l.last_review_at.isoformat() if l.last_review_at else "",
-            l.recent_review_detected, l.review_activity_confidence, l.reviews_returned,
-            l.fit_score, l.intent, l.score_model, l.status,
-            review_texts, len(l.reviews),
-        ])
-    # BOM UTF-8 para que Excel abra bien los acentos
-    content = "\ufeff" + buf.getvalue()
+    content = "\ufeff" + _leads_to_csv(leads)
     return Response(
         content=content,
         media_type="text/csv; charset=utf-8",

@@ -54,6 +54,7 @@ El body del POST **no trae `total_candidates`/`total_leads`** (todavía no se pr
 | GET | `/api/searches/{id}/usage` | Desglose de llamadas de una corrida | 200/404 |
 | POST | `/api/searches/{id}/score` | Re-scoring LLM de la corrida (async) | 202/404/409 |
 | GET | `/api/searches/{id}/export.csv` | Export CSV de los leads de la corrida | 200/404 |
+| GET | `/api/leads/export.csv` | Export CSV de todos los leads (con filtros) | 200 |
 
 ---
 
@@ -403,15 +404,38 @@ Fuerza el re-scoring de todos los leads de la corrida. Genera **nuevas** filas e
 
 ---
 
-### 4.12 `GET /api/searches/{id}/export.csv` — exportar leads a CSV
+### 4.12 `GET /api/searches/{id}/export.csv` — exportar leads de una corrida
 
 Exporta los leads de la corrida en CSV (UTF-8 con BOM para Excel).
 
 **Respuesta 200:** `text/csv; charset=utf-8` + header `Content-Disposition: attachment; filename="searches_{id}.csv"`.
 
-Columnas: `place_id, name, address, phone, rating, review_count, has_website, website_uri, maps_uri, last_review_at, recent_review_detected, review_activity_confidence, reviews_returned, fit_score, intent, score_model, status, reviews, reviews_total`. La columna `reviews` concatena el texto de hasta 5 reviews separadas por `; `.
+Columnas: `place_id, search_id, zona, categoria, name, address, phone, rating, review_count, has_website, website_uri, maps_uri, last_review_at, recent_review_detected, review_activity_confidence, reviews_returned, fit_score, intent, score_model, status, reviews, reviews_total`. La columna `reviews` concatena el texto de hasta 5 reviews separadas por `; `.
 
 **Errores:** `404` si no existe.
+
+---
+
+### 4.13 `GET /api/leads/export.csv` — exportar todos los leads (con filtros)
+
+Exporta **todos los leads del pipeline** a CSV, con los mismos filtros de `GET /leads`. Incluye `search_id`/`zona`/`categoria` para rastrear el origen de cada lead.
+
+**Query params (todos opcionales):**
+
+| Param | Tipo | Efecto |
+|---|---|---|
+| `has_website` | bool | `true`/`false` |
+| `min_rating` | float | `rating >= valor` |
+| `min_fit_score` | int 0-100 | `fit_score >= valor` |
+| `intent` | `hot`\|`warm`\|`cold` | score del LLM |
+| `status` | `nuevo`\|`lista_contacto`\|`contactado`\|`descartado`\|`convertido` | estado CRM |
+
+**Ejemplo request:**
+```
+GET /api/leads/export.csv?intent=hot&status=lista_contacto
+```
+
+**Respuesta 200:** `text/csv; charset=utf-8` + `Content-Disposition: attachment; filename="leads.csv"`. Mismas columnas que 4.12. Ordenado por `fit_score desc`.
 
 ---
 

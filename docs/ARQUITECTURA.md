@@ -180,7 +180,8 @@ Toda ruta (salvo `/api/health`) requiere header `X-API-Key`.
 | GET | `/api/leads/{place_id}/scores` | Historial de scores LLM del lead (reasoning + reason_codes) |
 | POST | `/api/leads/{place_id}/status` | Mini-CRM: `nuevo/lista_contacto/contactado/descartado/convertido` |
 | POST | `/api/searches/{id}/score` | Re-scoring LLM de la corrida (202, async) |
-| GET | `/api/searches/{id}/export.csv` | Export CSV de los leads (UTF-8 BOM) |
+| GET | `/api/searches/{id}/export.csv` | Export CSV de los leads de la corrida |
+| GET | `/api/leads/export.csv` | Export CSV global de leads (con filtros) |
 | GET | `/api/usage?month=YYYY-MM` | Totales mensuales por SKU vs cupo + costo |
 | GET | `/api/searches/{id}/usage` | Desglose de llamadas de una corrida |
 | GET | `/api/health` | Health check (sin auth) |

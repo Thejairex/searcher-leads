@@ -62,6 +62,54 @@ def test_export_csv_404():
     assert r.status_code == 404
 
 
+def test_export_all_leads_csv():
+    from app.models import Search, Lead, ReviewSnapshot
+    from app.db import SessionLocal
+    # limpiar previo
+    db = SessionLocal()
+    db.query(ReviewSnapshot).delete()
+    db.query(Lead).delete()
+    db.query(Search).delete()
+    db.commit()
+    db.close()
+
+    # 2 corridas con leads: 1 hot, 1 warm
+    db = SessionLocal()
+    s1 = Search(zona="BA", categoria="gimnasios", min_rating=4.3, max_days_since_review=90, status="done")
+    db.add(s1); db.commit(); db.refresh(s1)
+    s2 = Search(zona="Cordoba", categoria="dentistas", min_rating=4.3, max_days_since_review=90, status="done")
+    db.add(s2); db.commit(); db.refresh(s2)
+    db.add(Lead(place_id="g1", search_id=s1.id, name="Gym Hot", has_website=False, rating=4.9, fit_score=92, intent="hot", status="lista_contacto"))
+    db.add(Lead(place_id="d1", search_id=s2.id, name="Dent Warm", has_website=False, rating=4.5, fit_score=70, intent="warm", status="nuevo"))
+    db.commit()
+    db.close()
+
+    # Export sin filtros -> 2 filas
+    r = client.get("/api/leads/export.csv", headers=H)
+    assert r.status_code == 200
+    text = r.content.decode("utf-8-sig")
+    lines = text.strip().splitlines()
+    assert len(lines) == 3  # header + 2
+    # columnas de origen presentes
+    assert "search_id" in lines[0] and "zona" in lines[0] and "categoria" in lines[0]
+
+    # Filtro por intent=hot -> 1 fila
+    r2 = client.get("/api/leads/export.csv?intent=hot", headers=H)
+    lines2 = r2.content.decode("utf-8-sig").strip().splitlines()
+    assert len(lines2) == 2
+    assert "Gym Hot" in lines2[1]
+
+    # Filtro por status=lista_contacto -> 1 fila
+    r3 = client.get("/api/leads/export.csv?status=lista_contacto", headers=H)
+    lines3 = r3.content.decode("utf-8-sig").strip().splitlines()
+    assert len(lines3) == 2
+
+    # Filtro combinado -> 0 filas (sin match)
+    r4 = client.get("/api/leads/export.csv?intent=hot&min_fit_score=95", headers=H)
+    lines4 = r4.content.decode("utf-8-sig").strip().splitlines()
+    assert len(lines4) == 1  # solo header
+
+
 class FakePost:
     def __init__(self, responses):
         self.responses = list(responses)

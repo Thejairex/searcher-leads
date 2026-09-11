@@ -84,7 +84,8 @@ uvicorn app.main:app --reload --port 8001
 - `GET /api/leads/{place_id}/scores` — historial de scores LLM (reasoning + reason_codes)
 - `POST /api/leads/{place_id}/status` — mini-CRM (nuevo/lista_contacto/contactado/descartado/convertido)
 - `POST /api/searches/{id}/score` — re-scoring LLM de la corrida
-- `GET /api/searches/{id}/export.csv` — export CSV de los leads (UTF-8 BOM)
+- `GET /api/searches/{id}/export.csv` — export CSV de los leads de la corrida (UTF-8 BOM)
+- `GET /api/leads/export.csv?intent=hot&status=lista_contacto` — export CSV de todos los leads con filtros
 - `GET /api/usage?month=2026-09` — totales mensuales por SKU vs cupo gratis + costo estimado
 - `GET /api/searches/{id}/usage` — desglose de llamadas de una corrida
 
