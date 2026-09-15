@@ -42,9 +42,10 @@ async def _run_search_async(search_id: str, client: PlacesClient | None = None):
 
         client = client or PlacesClient(usage_cb=record_usage)
 
-        # Paso 1 (Text Search Enterprise): candidatos con websiteUri + minRating server-side.
-        # Google ya descartó rating < min_rating aquí. Si vienen lat/lng/radio, acota por radio.
-        # included_type restringe al tipo oficial de Google (filtro, no sube el SKU).
+        # Paso 1 (Text Search Enterprise/Enterprise+Atmosphere): candidatos.
+        # optimized -> solo id/websiteUri (barato) + Details después.
+        # full      -> todos los campos ya en el Text Search (sin Details).
+        # Google ya descartó rating < min_rating (minRating server-side).
         candidates = await client.text_search_all(
             search.zona,
             search.categoria,
@@ -54,6 +55,7 @@ async def _run_search_async(search_id: str, client: PlacesClient | None = None):
             lng=search.lng,
             radio=search.radio,
             included_type=search.included_type,
+            fetch_mode=search.fetch_mode,
         )
         search.total_candidates = len(candidates)
         db.commit()
@@ -63,6 +65,7 @@ async def _run_search_async(search_id: str, client: PlacesClient | None = None):
         # Contadores agregados por el fan-out (evita carreras con una sola sesión)
         aggregate = {
             "leads_found": 0,
+            "discarded_has_website": 0,
             "discarded_low_rating": 0,
             "discarded_no_recent_review": 0,
             "reused_from_cache": 0,
@@ -74,47 +77,54 @@ async def _run_search_async(search_id: str, client: PlacesClient | None = None):
             pid = cand["place_id"]
             async with sem:
                 try:
-                    # Skip temprano: con web -> no pago el detail caro.
-                    if cand.get("has_website"):
+                    # Skip temprano por web (solo si NO queremos incluir con web)
+                    if cand.get("has_website") and not search.include_with_website:
+                        aggregate["discarded_has_website"] += 1
                         return None
 
-                    # Paso 2 (Enterprise+Atmosphere): detail caro, solo si hace falta.
-                    # Caché: si ya tenemos el detalle fresco, no re-pagamos el SKU.
-                    cached = db.get(PlaceCache, pid)
+                    # fetch_mode="full": el Text Search ya trajo todos los datos
+                    parsed = cand.get("parsed")
                     from_cache = False
-                    if cached:
-                        fetched = cached.fetched_at
-                        if fetched.tzinfo is None:
-                            fetched = fetched.replace(tzinfo=timezone.utc)
-                        if datetime.now(timezone.utc) - fetched < cache_window:
-                            parsed = PlacesClient.parse_details(json.loads(cached.details_json))
-                            from_cache = True
-
-                    if not from_cache:
-                        raw = await client.get_details(pid)
-                        parsed = PlacesClient.parse_details(raw)
-                        # Guardar caché SIEMPRE (incluso descartados) para futuras corridas.
+                    if parsed is None:
+                        # Paso 2 (Enterprise+Atmosphere): detail caro, solo si hace falta.
+                        # Caché: si ya tenemos el detalle fresco, no re-pagamos el SKU.
+                        cached = db.get(PlaceCache, pid)
                         if cached:
-                            cached.website_uri = parsed["website_uri"]
-                            cached.rating = parsed["rating"]
-                            cached.review_count = parsed["review_count"]
-                            cached.details_json = json.dumps(raw, ensure_ascii=False)
-                            cached.fetched_at = datetime.now(timezone.utc)
-                        else:
-                            db.add(
-                                PlaceCache(
-                                    place_id=pid,
-                                    website_uri=parsed["website_uri"],
-                                    rating=parsed["rating"],
-                                    review_count=parsed["review_count"],
-                                    details_json=json.dumps(raw, ensure_ascii=False),
-                                    fetched_at=datetime.now(timezone.utc),
-                                )
-                            )
-                            db.flush()
+                            fetched = cached.fetched_at
+                            if fetched.tzinfo is None:
+                                fetched = fetched.replace(tzinfo=timezone.utc)
+                            if datetime.now(timezone.utc) - fetched < cache_window:
+                                parsed = PlacesClient.parse_details(json.loads(cached.details_json))
+                                from_cache = True
 
-                    # Filtros de calidad (sin web garantizado ya: cache/web temprano)
+                        if parsed is None:
+                            raw = await client.get_details(pid)
+                            parsed = PlacesClient.parse_details(raw)
+                            # Guardar caché SIEMPRE (incluso descartados) para futuras corridas.
+                            if cached:
+                                cached.website_uri = parsed["website_uri"]
+                                cached.rating = parsed["rating"]
+                                cached.review_count = parsed["review_count"]
+                                cached.details_json = json.dumps(raw, ensure_ascii=False)
+                                cached.fetched_at = datetime.now(timezone.utc)
+                            else:
+                                db.add(
+                                    PlaceCache(
+                                        place_id=pid,
+                                        website_uri=parsed["website_uri"],
+                                        rating=parsed["rating"],
+                                        review_count=parsed["review_count"],
+                                        details_json=json.dumps(raw, ensure_ascii=False),
+                                        fetched_at=datetime.now(timezone.utc),
+                                    )
+                                )
+                                db.flush()
+
+                    # Filtros de calidad
+                    # web: si include_with_website=True, no descartamos por web
                     reason = PlacesClient.filter_reason(parsed, search.min_rating, search.max_days_since_review)
+                    if reason == "has_website" and search.include_with_website:
+                        reason = None  # el usuario pidió incluir con web
                     if reason == "low_rating":
                         aggregate["discarded_low_rating"] += 1
                         db.commit()
@@ -193,9 +203,6 @@ async def _run_search_async(search_id: str, client: PlacesClient | None = None):
         # Fan-out concurrente: un semáforo limita las llamadas simultáneas a Google
         await asyncio.gather(*(procesar_candidato(c) for c in candidates))
 
-        # Contadores de descarte por web: los candidatos con web nunca llaman a Google
-        search.discarded_has_website = sum(1 for c in candidates if c.get("has_website"))
-
         # Persistir log de uso + contadores de costo
         calls_cheap = sum(1 for r in usage_rows if r.sku == SKU_TS_ENTERPRISE)
         calls_expensive = sum(1 for r in usage_rows if r.sku == SKU_ENTERPRISE)
@@ -204,6 +211,7 @@ async def _run_search_async(search_id: str, client: PlacesClient | None = None):
         search.calls_cheap = calls_cheap
         search.calls_expensive = calls_expensive
         search.est_cost_usd = search_cost(db, search_id, calls_cheap, calls_expensive, search.created_at)
+        search.discarded_has_website = aggregate["discarded_has_website"]
         search.discarded_low_rating = aggregate["discarded_low_rating"]
         search.discarded_no_recent_review = aggregate["discarded_no_recent_review"]
         search.reused_from_cache = aggregate["reused_from_cache"]

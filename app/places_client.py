@@ -20,6 +20,9 @@ from app.costing import SKU_TS_ENTERPRISE, SKU_ENTERPRISE
 # Paso 1: places.websiteUri pertenece al tier Enterprise (confirmado en sku-details de Google),
 # así que el Text Search se factura como Text Search Enterprise (1.000 gratis/mes, $35/1000).
 TEXT_SEARCH_FIELD_MASK = "places.id,places.displayName,places.websiteUri"
+# Mask completo para fetch_mode="full": trae TODO en el Text Search (sin Details posterior).
+# Sube el SKU a Text Search Enterprise+Atmosphere ($40/1000).
+TEXT_SEARCH_FIELD_MASK_FULL = "places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.reviews,places.googleMapsUri"
 DETAILS_FIELD_MASK = "id,displayName,formattedAddress,nationalPhoneNumber,websiteUri,rating,userRatingCount,reviews,googleMapsUri"
 
 TEXT_SEARCH_URL = settings.places_text_search_url
@@ -112,9 +115,11 @@ class PlacesClient:
         lng: float | None = None,
         radio: int | None = None,
         included_type: str | None = None,
+        fetch_mode: str = "optimized",
     ) -> dict:
         """
-        Paso 1 (Text Search Enterprise). Devuelve id + websiteUri por candidato.
+        Paso 1 (Text Search Enterprise/Enterprise+Atmosphere).
+        Devuelve id + websiteUri por candidato (optimized) o TODOS los campos (full).
         minRating filtra server-side. Si vienen lat/lng/radio, acota con locationBias.
         includedType restringe al tipo oficial de Google (filtro, no sube el SKU).
         """
@@ -135,9 +140,10 @@ class PlacesClient:
         if included_type:
             body["includedType"] = included_type
 
+        field_mask = TEXT_SEARCH_FIELD_MASK_FULL if fetch_mode == "full" else TEXT_SEARCH_FIELD_MASK
         resp = await self._request(
             "text_search", SKU_TS_ENTERPRISE, "POST", TEXT_SEARCH_URL,
-            self._headers(TEXT_SEARCH_FIELD_MASK), json_body=body,
+            self._headers(field_mask), json_body=body,
         )
         return resp.json()
 
@@ -151,14 +157,20 @@ class PlacesClient:
         lng: float | None = None,
         radio: int | None = None,
         included_type: str | None = None,
+        fetch_mode: str = "optimized",
     ) -> list[dict]:
-        """Itera paginación y retorna candidatos [{"place_id": str, "has_website": bool}]."""
+        """Itera paginación y retorna candidatos.
+
+        optimized -> [{"place_id", "has_website"}]
+        full      -> [{"place_id", "has_website", "parsed": {datos completos}}]
+        """
         ids: list[dict] = []
         token: str | None = None
         for _ in range(max_pages):
             data = await self.text_search(
                 zona, categoria, page_token=token, min_rating=min_rating,
                 lat=lat, lng=lng, radio=radio, included_type=included_type,
+                fetch_mode=fetch_mode,
             )
             places = data.get("places", [])
             for p in places:
@@ -166,7 +178,10 @@ class PlacesClient:
                 if pid.startswith("places/"):
                     pid = pid.split("/", 1)[1]
                 if pid:
-                    ids.append({"place_id": pid, "has_website": bool(p.get("websiteUri"))})
+                    cand = {"place_id": pid, "has_website": bool(p.get("websiteUri"))}
+                    if fetch_mode == "full":
+                        cand["parsed"] = self.parse_details(p)
+                    ids.append(cand)
             token = data.get("nextPageToken")
             if not token:
                 break

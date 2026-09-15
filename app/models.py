@@ -20,6 +20,9 @@ class Search(Base):
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     included_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    target_leads: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fetch_mode: Mapped[str] = mapped_column(String(20), default="optimized")  # optimized|full
+    include_with_website: Mapped[bool] = mapped_column(Boolean, default=False)
     min_rating: Mapped[float] = mapped_column(Float, default=4.3)
     max_days_since_review: Mapped[int] = mapped_column(Integer, default=90)
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/running/done/failed

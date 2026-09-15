@@ -75,7 +75,7 @@ uvicorn app.main:app --reload --port 8001
 
 ## Endpoints
 
-- `POST /api/searches` (202, async) — dispara búsqueda. Body: `{zona, categoria, lat?, lng?, radio?, min_rating?, max_days_since_review?}`. Con `lat`/`lng`/`radio` acota por radio (`locationBias.circle`). Devuelve **acuse de recibo** (`id`, `status: pending`, `poll_url`) + header `Location`.
+- `POST /api/searches` (202, async) — dispara búsqueda. Body: `{zona, categoria, lat?, lng?, radio?, target_leads?, fetch_mode?, include_with_website?, included_type?, min_rating?, max_days_since_review?}`. Devuelve **acuse de recibo** (`id`, `status: pending`, `poll_url`) + header `Location`.
 
 > **Async**: el `POST` responde `202` antes de que el worker termine. El body es solo el job aceptado — no trae resultados. Usá `poll_url` (o el header `Location`) y hacé polling con `GET /api/searches/{id}` hasta que `status: done`.
 - `GET /api/searches/{id}` — estado + contadores de uso (`calls_cheap`, `calls_expensive`, `est_cost_usd`) + `scored_leads`
@@ -107,4 +107,4 @@ Cada llamada a Google se loguea en `api_usage` (método, SKU, status, latencia, 
 
 ## Env vars
 
-`DATABASE_URL=sqlite:///./data/search_leads.db` (default), `DEFAULT_MIN_RATING=4.3`, `DEFAULT_MAX_DAYS_SINCE_REVIEW=90`, `DETAIL_CACHE_HOURS=168`, `FREE_TS_ENTERPRISE_MONTHLY`, `FREE_ENTERPRISE_MONTHLY`, `COST_TS_ENTERPRISE_PER_1000`, `COST_ENTERPRISE_PER_1000`, `OPENROUTER_API_KEY`, `SCORE_ENABLED`, `SCORE_MODEL`, `SCORE_FALLBACK_MODEL`, `SCORE_TEMPERATURE`, `USE_INCLUDED_TYPE`, `WEBHOOK_URL`, `WEBHOOK_ENABLED`, `WEBHOOK_TIMEOUT`
+`DATABASE_URL=sqlite:///./data/search_leads.db` (default), `DEFAULT_MIN_RATING=4.3`, `DEFAULT_MAX_DAYS_SINCE_REVIEW=90`, `DETAIL_CACHE_HOURS=168`, `FREE_TS_ENTERPRISE_MONTHLY`, `FREE_ENTERPRISE_MONTHLY`, `COST_TS_ENTERPRISE_PER_1000`, `COST_ENTERPRISE_PER_1000`, `MAX_CANDIDATES`, `DEFAULT_TARGET_LEADS`, `OPENROUTER_API_KEY`, `SCORE_ENABLED`, `SCORE_MODEL`, `SCORE_FALLBACK_MODEL`, `SCORE_TEMPERATURE`, `USE_INCLUDED_TYPE`, `WEBHOOK_URL`, `WEBHOOK_ENABLED`, `WEBHOOK_TIMEOUT`

@@ -9,6 +9,9 @@ class SearchCreate(BaseModel):
     lat: float | None = Field(None, ge=-90, le=90, description="Latitud del centro del radio")
     lng: float | None = Field(None, ge=-180, le=180, description="Longitud del centro del radio")
     included_type: str | None = Field(None, description="Tipo oficial de Google (override del mapeo por categoría)")
+    target_leads: int | None = Field(None, ge=1, le=50, description="Cantidad de leads a buscar (máx 50 por petición)")
+    fetch_mode: str = Field("optimized", pattern="^(optimized|full)$", description="optimized: 2 pasos barato+detalle; full: trae todo en el Text Search")
+    include_with_website: bool = Field(False, description="True: incluye negocios con sitio web en los resultados")
     min_rating: float | None = Field(None, ge=0, le=5)
     max_days_since_review: int | None = Field(None, ge=1, le=365)
 
@@ -23,6 +26,9 @@ class SearchAccepted(BaseModel):
     lat: float | None
     lng: float | None
     included_type: str | None
+    target_leads: int | None
+    fetch_mode: str
+    include_with_website: bool
     min_rating: float
     max_days_since_review: int
     status: str  # siempre "pending"
@@ -38,6 +44,9 @@ class SearchOut(BaseModel):
     lat: float | None
     lng: float | None
     included_type: str | None
+    target_leads: int | None
+    fetch_mode: str
+    include_with_website: bool
     min_rating: float
     max_days_since_review: int
     status: str

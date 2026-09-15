@@ -194,6 +194,21 @@ Cada lead tiene un `status` que el equipo comercial maneja:
 
 Si la `categoria` tiene match en el catálogo oficial de Google (ej. `"gimnasios"` → `gym`, `"tecnologia"` → `software_company`), se envía `includedType` como filtro de precisión. Es un filtro (como `minRating`), **no sube el SKU**. Se puede hacer override con el campo `included_type` del POST, o desactivar con `USE_INCLUDED_TYPE=false`. La lista está en `app/category_map.py` (~30 categorías comunes).
 
+### Buscador simple vs avanzado
+
+- **Simple:** solo `zona` + `categoria`. Usa los defaults: excluye negocios con web, `fetch_mode=optimized`, sin `target_leads`.
+- **Avanzado:** expone todo el embudo de filtros — `min_rating`, `max_days_since_review`, `target_leads`, `fetch_mode`, `include_with_website`, `lat`/`lng`/`radio`, `included_type`.
+
+**`target_leads` (máx 50):** el usuario define cuántos leads busca. El worker procesa candidatos hasta alcanzarlo o agotar el cupo de resultados de Google (máx ~60 por query). Si no llega al target, la corrida queda `done` con lo que encontró (no falla).
+
+**`fetch_mode`:**
+- `optimized` (default): Text Search barato (id+websiteUri) → Place Details solo para candidatos que pasan. Ahorra cuando muchos tienen web.
+- `full`: pide rating/reviews/teléfono/dirección en el **mismo** Text Search (mask completo) → **1 llamada por página, sin Details**. Ideal para "traer todos los datos de una vez".
+
+> **Nota de costos `full`:** traer todo en el Text Search sube el SKU a **Text Search Enterprise+Atmosphere ($40/1000)** en vez de Enterprise ($35/1000), pero **elimina los N Place Details caros** ($25/1000 cada uno). Cuándo conviene: cuando son pocos los candidatos que pasan el filtro de web. Ej. Buenos Aires "gimnasios": `full` = 1 llamada total; `optimized` = 1 Text Search + 3-20 Details. Si muchos candidatos tienen web (se descartan en `optimized` sin pagar detail), `full` paga por todo igual — elegir según el caso.
+
+**`include_with_website`:** por default `false` (solo negocios sin web, el ICP). En avanzado se puede activar para incluir los que tienen sitio.
+
 ### Notificaciones (webhook)
 
 Al cerrar una corrida (**done o failed**), si `WEBHOOK_URL` y `WEBHOOK_ENABLED` están seteados, se envía un POST JSON con el resumen (search_id, status, total_leads, scored_leads, est_cost_usd, URLs de leads y CSV). Cada intento se registra en `webhook_deliveries` — un fallo del webhook **no** afecta la corrida.

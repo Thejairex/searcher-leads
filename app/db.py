@@ -51,6 +51,9 @@ def _ensure_search_columns():
             "lat": "FLOAT",
             "lng": "FLOAT",
             "included_type": "VARCHAR(100)",
+            "target_leads": "INTEGER",
+            "fetch_mode": "VARCHAR(20) DEFAULT 'optimized'",
+            "include_with_website": "BOOLEAN DEFAULT 0",
         }
         for name, ddl in adds.items():
             if name not in cols:

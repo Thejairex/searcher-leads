@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # POST /api/searches hace override del mapeo automático.
     use_included_type: bool = True
 
+    # Límite de candidatos a recolectar por búsqueda (Google Text Search cap ~60 por query)
+    max_candidates: int = 300
+    default_target_leads: int = 50
+
     # Webhook: notifica al cerrar una corrida (done o failed)
     webhook_url: str = ""
     webhook_enabled: bool = False

@@ -85,8 +85,15 @@ Dispara una búsqueda de leads en background. **Async**: responde `202` con acus
 | `lat` | no | `-90..90` | Latitud del centro para el radio |
 | `lng` | no | `-180..180` | Longitud del centro para el radio |
 | `included_type` | no | texto | Tipo oficial de Google (override del mapeo por categoría) |
+| `target_leads` | no | `1–50` | Cantidad de leads a buscar (máx 50 por petición) |
+| `fetch_mode` | no | `optimized`\|`full` | `optimized` (default): 2 pasos (barato + detail). `full`: trae todo en el Text Search, sin Details |
+| `include_with_website` | no | bool (default `false`) | `true` incluye negocios con sitio web en los resultados |
 | `min_rating` | no | `0–5` | Filtro server-side de Google (default `4.3`) |
 | `max_days_since_review` | no | `1–365` | Filtro en código: review reciente en los últimos N días (default `90`) |
+
+**Buscador simple vs avanzado:** el simple manda solo `zona`+`categoria` y usa los defaults (sin web, `optimized`, sin target). El avanzado expone todos los campos de arriba para ajustar el embudo de filtros.
+
+**`fetch_mode`:** `optimized` usa el mask mínimo y luego Place Details solo para los candidatos que pasan (más barato si hay muchos con web). `full` trae rating/reviews/teléfono/dirección ya en el Text Search (1 llamada por página, sin Details) — útil para traer todo de una vez.
 
 Si mandás `lat`+`lng` (+ opcional `radio`), la búsqueda se acota con `locationBias.circle` en Google (centro + radio). Sin `lat`/`lng`, `radio` se ignora.
 

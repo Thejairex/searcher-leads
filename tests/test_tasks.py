@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.db import SessionLocal
 from app.models import Search, Lead, ReviewSnapshot, ApiUsage, PlaceCache, LeadScore, WebhookDelivery
+from app.places_client import PlacesClient
 from app.tasks import _run_search_async, _score_search_async
 from app.config import settings
 
@@ -41,7 +42,7 @@ class FakePlaces:
         self.details = details_by_id
         self.detail_calls = 0
 
-    async def text_search_all(self, zona, categoria, max_pages=3, min_rating=None, lat=None, lng=None, radio=None, included_type=None):
+    async def text_search_all(self, zona, categoria, max_pages=3, min_rating=None, lat=None, lng=None, radio=None, included_type=None, fetch_mode="optimized"):
         return self.candidates
 
     async def get_details(self, pid):
@@ -284,10 +285,85 @@ def test_radio_passthrough_to_client():
             super().__init__([], {})
             self.seen = None
 
-        async def text_search_all(self, zona, categoria, max_pages=3, min_rating=None, lat=None, lng=None, radio=None, included_type=None):
+        async def text_search_all(self, zona, categoria, max_pages=3, min_rating=None, lat=None, lng=None, radio=None, included_type=None, fetch_mode="optimized"):
             self.seen = (lat, lng, radio, included_type)
             return []
 
     fake = RadioCheckPlaces()
     asyncio.run(_run_search_async(sid, client=fake))
     assert fake.seen == (-34.6, -58.38, 5000, "software_company")
+
+
+def test_fetch_mode_full_uses_parsed_without_details():
+    """fetch_mode=full: el Text Search trae todo, no se llama get_details."""
+    _clean()
+    db = SessionLocal()
+    s = Search(zona="BA", categoria="gimnasios", min_rating=4.3, max_days_since_review=90, status="pending", fetch_mode="full")
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    sid = s.id
+    db.close()
+
+    candidates = [{"place_id": "p1", "has_website": False, "parsed": PlacesClient.parse_details(_mk_details("p1"))}]
+    fake = FakePlaces(candidates, {})
+    asyncio.run(_run_search_async(sid, client=fake))
+
+    db = SessionLocal()
+    s = db.query(Search).filter(Search.id == sid).first()
+    assert s.total_leads == 1
+    lead = db.query(Lead).filter(Lead.place_id == "p1").first()
+    assert lead is not None
+    assert lead.rating == 4.5
+    db.close()
+
+
+def test_include_with_website_true_keeps_web_leads():
+    _clean()
+    db = SessionLocal()
+    s = Search(zona="BA", categoria="gimnasios", min_rating=4.3, max_days_since_review=90, status="pending", include_with_website=True)
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    sid = s.id
+    db.close()
+
+    # candidato CON web y rating alto
+    candidates = [{"place_id": "p_web", "has_website": True}]
+    details = {"p_web": _mk_details("p_web", website="https://x.com")}
+    fake = FakePlaces(candidates, details)
+    asyncio.run(_run_search_async(sid, client=fake))
+
+    db = SessionLocal()
+    s = db.query(Search).filter(Search.id == sid).first()
+    assert s.total_leads == 1
+    assert s.discarded_has_website == 0
+    lead = db.query(Lead).filter(Lead.place_id == "p_web").first()
+    assert lead is not None
+    assert lead.has_website is True
+    db.close()
+
+
+def test_default_excludes_web_leads():
+    """Default include_with_website=False: descarta los que tienen web."""
+    _clean()
+    db = SessionLocal()
+    s = Search(zona="BA", categoria="gimnasios", min_rating=4.3, max_days_since_review=90, status="pending")
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    sid = s.id
+    db.close()
+
+    candidates = [{"place_id": "p_web", "has_website": True}, {"place_id": "p_ok", "has_website": False}]
+    details = {"p_web": _mk_details("p_web", website="https://x.com"), "p_ok": _mk_details("p_ok")}
+    fake = FakePlaces(candidates, details)
+    asyncio.run(_run_search_async(sid, client=fake))
+
+    db = SessionLocal()
+    s = db.query(Search).filter(Search.id == sid).first()
+    assert s.total_leads == 1
+    assert s.discarded_has_website == 1
+    assert db.query(Lead).filter(Lead.place_id == "p_web").count() == 0
+    assert db.query(Lead).filter(Lead.place_id == "p_ok").count() == 1
+    db.close()

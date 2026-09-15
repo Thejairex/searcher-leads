@@ -28,6 +28,9 @@ def test_create_search():
     assert data["max_days_since_review"] == 90
     assert data["status"] == "pending"
     assert data["poll_url"] == f"/api/searches/{data['id']}"
+    assert data["fetch_mode"] == "optimized"
+    assert data["include_with_website"] is False
+    assert data["target_leads"] is None
     # Acuse de recibo: NO debe traer contadores de resultado (están en el GET)
     assert "total_candidates" not in data
     assert "total_leads" not in data
@@ -41,6 +44,29 @@ def test_create_search():
     assert r2.json()["id"] == sid
     # el GET sí trae contadores
     assert "total_candidates" in r2.json()
+
+
+def test_create_search_target_and_modes():
+    r = client.post("/api/searches", json={
+        "zona": "BA", "categoria": "tech", "target_leads": 25,
+        "fetch_mode": "full", "include_with_website": True,
+    }, headers=H)
+    assert r.status_code == 202
+    data = r.json()
+    assert data["target_leads"] == 25
+    assert data["fetch_mode"] == "full"
+    assert data["include_with_website"] is True
+
+
+def test_create_search_target_leads_max_50():
+    # > 50 -> 422
+    r = client.post("/api/searches", json={"zona": "BA", "categoria": "tech", "target_leads": 51}, headers=H)
+    assert r.status_code == 422
+
+
+def test_create_search_fetch_mode_invalid():
+    r = client.post("/api/searches", json={"zona": "BA", "categoria": "tech", "fetch_mode": "todo"}, headers=H)
+    assert r.status_code == 422
 
 
 def test_lead_status_validation():
