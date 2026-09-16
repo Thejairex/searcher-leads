@@ -13,7 +13,7 @@ init_db()
 from sqlalchemy.orm import Session
 
 def _clean():
-    from app.models import ReviewSnapshot, Lead, Search, ApiUsage, PlaceCache, LeadScore, WebhookDelivery
+    from app.models import ReviewSnapshot, Lead, Search, ApiUsage, PlaceCache, LeadScore, WebhookDelivery, SearchCandidate
 
     with Session(engine) as s:
         s.query(WebhookDelivery).delete()
@@ -22,6 +22,7 @@ def _clean():
         s.query(PlaceCache).delete()
         s.query(ReviewSnapshot).delete()
         s.query(Lead).delete()
+        s.query(SearchCandidate).delete()
         s.query(Search).delete()
         s.commit()
 

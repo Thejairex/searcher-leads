@@ -19,7 +19,7 @@ from app.costing import SKU_TS_ENTERPRISE, SKU_ENTERPRISE
 # FieldMasks según investigacion.md
 # Paso 1: places.websiteUri pertenece al tier Enterprise (confirmado en sku-details de Google),
 # así que el Text Search se factura como Text Search Enterprise (1.000 gratis/mes, $35/1000).
-TEXT_SEARCH_FIELD_MASK = "places.id,places.displayName,places.websiteUri"
+TEXT_SEARCH_FIELD_MASK = "places.id,places.displayName,places.formattedAddress,places.websiteUri"
 # Mask completo para fetch_mode="full": trae TODO en el Text Search (sin Details posterior).
 # Sube el SKU a Text Search Enterprise+Atmosphere ($40/1000).
 TEXT_SEARCH_FIELD_MASK_FULL = "places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.reviews,places.googleMapsUri"
@@ -161,8 +161,8 @@ class PlacesClient:
     ) -> list[dict]:
         """Itera paginación y retorna candidatos.
 
-        optimized -> [{"place_id", "has_website"}]
-        full      -> [{"place_id", "has_website", "parsed": {datos completos}}]
+        optimized -> [{"place_id", "has_website", "name", "formatted_address"}]
+        full      -> [{"place_id", "has_website", "name", "formatted_address", "parsed": {datos completos}}]
         """
         ids: list[dict] = []
         token: str | None = None
@@ -178,7 +178,12 @@ class PlacesClient:
                 if pid.startswith("places/"):
                     pid = pid.split("/", 1)[1]
                 if pid:
-                    cand = {"place_id": pid, "has_website": bool(p.get("websiteUri"))}
+                    cand = {
+                        "place_id": pid,
+                        "has_website": bool(p.get("websiteUri")),
+                        "name": p.get("displayName", {}).get("text") if isinstance(p.get("displayName"), dict) else p.get("displayName"),
+                        "formatted_address": p.get("formattedAddress"),
+                    }
                     if fetch_mode == "full":
                         cand["parsed"] = self.parse_details(p)
                     ids.append(cand)

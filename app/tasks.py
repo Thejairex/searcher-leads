@@ -58,6 +58,17 @@ async def _run_search_async(search_id: str, client: PlacesClient | None = None):
             fetch_mode=search.fetch_mode,
         )
         search.total_candidates = len(candidates)
+        # Persistir candidatos crudos (lo que trajo la búsqueda, sin filtrar)
+        from app.models import SearchCandidate
+        for idx, c in enumerate(candidates):
+            db.add(SearchCandidate(
+                search_id=search.id,
+                place_id=c["place_id"],
+                name=c.get("name"),
+                formatted_address=c.get("formatted_address"),
+                has_website=bool(c.get("has_website")),
+                position=idx,
+            ))
         db.commit()
 
         cache_window = timedelta(hours=settings.detail_cache_hours)

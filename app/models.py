@@ -130,6 +130,25 @@ class PlaceCache(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class SearchCandidate(Base):
+    """Candidatos crudos traídos por el Text Search (lo que devolvió Google, sin filtrar)."""
+    __tablename__ = "search_candidates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    search_id: Mapped[str] = mapped_column(String(36), ForeignKey("searches.id"), nullable=False, index=True)
+    place_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    formatted_address: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    has_website: Mapped[bool] = mapped_column(Boolean, default=False)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        # un place_id puede aparecer en varias búsquedas, pero no duplicado en la misma
+        {"sqlite_autoincrement": False},
+    )
+
+
 class LeadScore(Base):
     """Historial de scores LLM por lead/modelo (auditabilidad + re-scoring)."""
     __tablename__ = "lead_scores"

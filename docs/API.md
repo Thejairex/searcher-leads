@@ -55,6 +55,8 @@ El body del POST **no trae `total_candidates`/`total_leads`** (todavía no se pr
 | POST | `/api/searches/{id}/score` | Re-scoring LLM de la corrida (async) | 202/404/409 |
 | GET | `/api/searches/{id}/export.csv` | Export CSV de los leads de la corrida | 200/404 |
 | GET | `/api/leads/export.csv` | Export CSV de todos los leads (con filtros) | 200 |
+| GET | `/api/searches/{id}/candidates` | Candidatos crudos de la búsqueda (barato, DB) | 200/404 |
+| GET | `/api/candidates/{place_id}` | Detalle caro de un candidato (desacoplado) | 200/404/502 |
 
 ---
 
@@ -423,7 +425,89 @@ Columnas: `place_id, search_id, zona, categoria, name, address, phone, rating, r
 
 ---
 
-### 4.13 `GET /api/leads/export.csv` — exportar todos los leads (con filtros)
+### 4.13 `GET /api/searches/{search_id}/candidates` — candidatos crudos de una búsqueda
+
+Lista **lo que trajo la búsqueda**, sin consultar el detalle caro. Barato: solo lee la DB.
+
+**Query params:**
+- `page` — int ≥1 (default 1)
+- `limit` — int 1-100 (default 20)
+
+**Respuesta 200:** `list[CandidateOut]` — paginado por `position`:
+
+| Campo | Significado |
+|---|---|
+| `place_id` | ID del lugar en Google |
+| `search_id` | búsqueda a la que pertenece |
+| `name` | nombre del negocio (`displayName` del Text Search) |
+| `formatted_address` | dirección |
+| `has_website` | si el Text Search trajo `websiteUri` |
+| `position` | orden en la respuesta de Google |
+| `created_at` | cuándo se guardó |
+
+```json
+[
+  {
+    "place_id": "ChIJPcLEhiKjMpQRrahRYE_ZQzE",
+    "search_id": "392f0b60-51e7-4b09-9aad-a2c0fa00d38c",
+    "name": "Best Club",
+    "formatted_address": "San Lorenzo 449, Córdoba",
+    "has_website": true,
+    "position": 0,
+    "created_at": "2026-09-16T16:56:56.872347"
+  }
+]
+```
+**Errores:** `404` si la búsqueda no existe.
+
+---
+
+### 4.14 `GET /api/candidates/{place_id}` — detalle caro de un candidato (desacoplado)
+
+Trae los datos completos de un candidato usando el **SKU caro** (`Place Details Enterprise+Atmosphere`). Endpoint desacoplado: no está anidado bajo una búsqueda.
+
+**Query params:**
+- `promote` — bool (default `false`). Si `true`, intenta promover a lead.
+- `search_id` — requerido si `promote=true`: búsqueda destino para crear el lead. El lead solo se crea si pasa los filtros de esa búsqueda.
+
+**Respuesta 200 (`CandidateDetailOut`):**
+
+| Campo | Significado |
+|---|---|
+| `place_id`, `name`, `address`, `phone` | datos del negocio |
+| `rating` / `review_count` | rating y total de reviews |
+| `has_website` / `website_uri` / `maps_uri` | contacto |
+| `last_review_at`, `recent_review_detected`, `review_activity_confidence`, `reviews_returned` | actividad de reviews |
+| `reviews` | array de reviews observadas |
+| `cached` | `true` si vino de `PlaceCache` (sin pagar a Google) |
+
+```json
+{
+  "place_id": "ChIJPcLEhiKjMpQRrahRYE_ZQzE",
+  "name": "Best Club",
+  "address": "San Lorenzo 449, Córdoba",
+  "phone": "351-123456",
+  "rating": 4.8,
+  "review_count": 42,
+  "has_website": true,
+  "website_uri": "https://bestclub.com",
+  "maps_uri": "https://maps.google.com/?cid=1",
+  "last_review_at": "2026-07-31T18:43:37.000000",
+  "review_activity_confidence": "partial",
+  "reviews_returned": 5,
+  "recent_review_detected": true,
+  "reviews": [{ "author": "Juan", "rating": 5, "text": "...", "publish_time": "2026-07-31T00:00:00" }],
+  "cached": false
+}
+```
+
+Si `promote=true` y el candidato pasa los filtros de la `search_id`, además **crea/actualiza el lead** (upsert por `place_id`, con reviews). La respuesta sigue siendo el detalle; el lead queda disponible en `GET /api/searches/{id}/leads`.
+
+**Errores:** `404` (search no encontrado para promover), `502` (Google no respondió).
+
+---
+
+### 4.15 `GET /api/leads/export.csv` — exportar todos los leads (con filtros)
 
 Exporta **todos los leads del pipeline** a CSV, con los mismos filtros de `GET /leads`. Incluye `search_id`/`zona`/`categoria` para rastrear el origen de cada lead.
 

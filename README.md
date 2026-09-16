@@ -80,6 +80,8 @@ uvicorn app.main:app --reload --port 8001
 > **Async**: el `POST` responde `202` antes de que el worker termine. El body es solo el job aceptado — no trae resultados. Usá `poll_url` (o el header `Location`) y hacé polling con `GET /api/searches/{id}` hasta que `status: done`.
 - `GET /api/searches/{id}` — estado + contadores de uso (`calls_cheap`, `calls_expensive`, `est_cost_usd`) + `scored_leads`
 - `GET /api/searches/{id}/leads?has_website=false&min_rating=4.3&intent=hot&min_fit_score=85` — lista filtrada
+- `GET /api/searches/{id}/candidates?page=1&limit=20` — candidatos crudos de la búsqueda (barato, DB)
+- `GET /api/candidates/{place_id}` — detalle caro desacoplado (Enterprise+Atmosphere); `?promote=true&search_id={id}` promueve a lead si pasa filtros
 - `GET /api/leads/{place_id}` — detalle + reviews + score LLM
 - `GET /api/leads/{place_id}/scores` — historial de scores LLM (reasoning + reason_codes)
 - `POST /api/leads/{place_id}/status` — mini-CRM (nuevo/lista_contacto/contactado/descartado/convertido)

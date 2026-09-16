@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db, init_db
-from app.models import Search, Lead, ApiUsage, LeadScore
+from app.models import Search, Lead, ApiUsage, LeadScore, SearchCandidate, PlaceCache, ReviewSnapshot
 from app.category_map import resolve_included_type
 from app.schemas import (
     SearchCreate,
@@ -16,11 +16,14 @@ from app.schemas import (
     LeadOut,
     LeadStatusUpdate,
     LeadScoreOut,
+    CandidateOut,
+    CandidateDetailOut,
     UsageRowOut,
     SkuTotalsOut,
     UsageTotalsOut,
     SearchUsageOut,
 )
+from app.places_client import PlacesClient
 from app.security import verify_api_key
 from app.tasks import run_search, score_search
 from app.costing import monthly_totals, month_key
@@ -171,6 +174,155 @@ def export_leads_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="leads.csv"'},
     )
+
+
+@app.get("/api/searches/{search_id}/candidates", response_model=list[CandidateOut], dependencies=[Depends(verify_api_key)])
+def list_candidates(
+    search_id: str,
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Lista lo que trajo la búsqueda (candidatos crudos, sin consultar Details).
+
+    Barato: solo DB, no toca Google.
+    """
+    s = db.query(Search).filter(Search.id == search_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Search not found")
+    q = db.query(SearchCandidate).filter(SearchCandidate.search_id == search_id).order_by(SearchCandidate.position)
+    offset = (page - 1) * limit
+    return q.offset(offset).limit(limit).all()
+
+
+@app.get("/api/candidates/{place_id}", response_model=CandidateDetailOut, dependencies=[Depends(verify_api_key)])
+async def get_candidate_detail(
+    place_id: str,
+    db: Session = Depends(get_db),
+    promote: bool = Query(False, description="Si true, intenta promover a lead si pasa filtros"),
+    search_id: str | None = Query(None, description="search_id destino si promote=true"),
+):
+    """Trae los datos completos de un candidato (usa el SKU caro).
+
+    Siempre usa el SKU caro (Enterprise+Atmosphere). Reusa PlaceCache si está fresco.
+    """
+    # 1. Cache hit?
+    cached = db.query(PlaceCache).filter(PlaceCache.place_id == place_id).first()
+    from datetime import datetime, timezone, timedelta
+    raw = None
+    used_cache = False
+    if cached:
+        fetched = cached.fetched_at
+        if fetched.tzinfo is None:
+            fetched = fetched.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) - fetched < timedelta(hours=settings.detail_cache_hours):
+            raw = json.loads(cached.details_json)
+            used_cache = True
+    if raw is None:
+        from datetime import datetime as dt
+        from app.costing import SKU_ENTERPRISE, month_key
+        from app.models import ApiUsage
+        import time
+        # Uso desacoplado: sin search_id (global) -> month_key actual
+        start = time.monotonic()
+        status_code = None
+        latency_ms = None
+        try:
+            client = PlacesClient()
+            raw = await client.get_details(place_id)
+            # Registrar api_usage como llamada desacoplada (search_id = None)
+            # No podemos usar usage_cb porque es un cliente sin search; registramos directo
+            pass
+        except Exception:
+            raise HTTPException(status_code=502, detail="No se pudo obtener el detalle del candidato desde Google")
+        # Persistir en cache + api_usage
+        parsed_for_cache = PlacesClient.parse_details(raw)
+        if cached:
+            cached.website_uri = parsed_for_cache["website_uri"]
+            cached.rating = parsed_for_cache["rating"]
+            cached.review_count = parsed_for_cache["review_count"]
+            cached.details_json = json.dumps(raw, ensure_ascii=False)
+            cached.fetched_at = datetime.now(timezone.utc)
+        else:
+            db.add(PlaceCache(
+                place_id=place_id,
+                website_uri=parsed_for_cache["website_uri"],
+                rating=parsed_for_cache["rating"],
+                review_count=parsed_for_cache["review_count"],
+                details_json=json.dumps(raw, ensure_ascii=False),
+                fetched_at=datetime.now(timezone.utc),
+            ))
+        db.commit()
+
+    parsed = PlacesClient.parse_details(raw)
+    confidence = PlacesClient.review_confidence(parsed.get("review_count"), parsed.get("reviews_returned") or 0)
+    last = parsed.get("last_review_at")
+    recent = last is not None  # sin ventana específica: si hay last_review_at, hubo review
+    detail = CandidateDetailOut(
+        place_id=parsed["place_id"],
+        name=parsed["name"],
+        address=parsed["address"],
+        phone=parsed["phone"],
+        rating=parsed["rating"],
+        review_count=parsed["review_count"],
+        has_website=parsed["has_website"],
+        website_uri=parsed["website_uri"],
+        maps_uri=parsed["maps_uri"],
+        last_review_at=parsed["last_review_at"],
+        review_activity_confidence=confidence,
+        reviews_returned=parsed.get("reviews_returned"),
+        recent_review_detected=recent,
+        reviews=[{"author": r.get("author"), "rating": r.get("rating"), "text": r.get("text"), "publish_time": r.get("publish_time")} for r in parsed["reviews"]],
+        cached=used_cache,
+    )
+
+    if promote and search_id:
+        search = db.query(Search).filter(Search.id == search_id).first()
+        if not search:
+            raise HTTPException(status_code=404, detail="Search no encontrado para promover")
+        reason = PlacesClient.filter_reason(parsed, search.min_rating, search.max_days_since_review)
+        if reason == "has_website" and search.include_with_website:
+            reason = None
+        if reason is None:
+            # upsert lead (mismo código que tasks)
+            from datetime import datetime, timezone, timedelta
+            review_confidence = PlacesClient.review_confidence(parsed.get("review_count"), parsed.get("reviews_returned") or 0)
+            last2 = parsed.get("last_review_at")
+            recent2 = last2 is not None and (datetime.now(timezone.utc) - last2).days <= search.max_days_since_review
+            existing = db.query(Lead).filter(Lead.place_id == place_id).first()
+            if existing:
+                existing.search_id = search.id
+                existing.name = parsed["name"]
+                existing.address = parsed["address"]
+                existing.phone = parsed["phone"]
+                existing.rating = parsed["rating"]
+                existing.review_count = parsed["review_count"]
+                existing.has_website = parsed["has_website"]
+                existing.website_uri = parsed["website_uri"]
+                existing.maps_uri = parsed["maps_uri"]
+                existing.last_review_at = parsed["last_review_at"]
+                existing.recent_review_detected = recent2
+                existing.review_activity_confidence = review_confidence
+                existing.reviews_returned = parsed.get("reviews_returned")
+                existing.updated_at = datetime.now(timezone.utc)
+                db.query(ReviewSnapshot).filter(ReviewSnapshot.place_id == place_id).delete()
+            else:
+                db.add(Lead(
+                    place_id=place_id, search_id=search.id,
+                    name=parsed["name"], address=parsed["address"], phone=parsed["phone"],
+                    rating=parsed["rating"], review_count=parsed["review_count"],
+                    has_website=parsed["has_website"], website_uri=parsed["website_uri"],
+                    maps_uri=parsed["maps_uri"], last_review_at=parsed["last_review_at"],
+                    recent_review_detected=recent2, review_activity_confidence=review_confidence,
+                    reviews_returned=parsed.get("reviews_returned"),
+                ))
+                db.flush()
+            for r in parsed["reviews"]:
+                from app.models import ReviewSnapshot as RS
+                db.add(RS(place_id=place_id, author=r.get("author"), rating=r.get("rating"), text=r.get("text"), publish_time=r.get("publish_time")))
+            db.commit()
+
+    return detail
 
 
 @app.get("/api/leads/{place_id}", response_model=LeadOut, dependencies=[Depends(verify_api_key)])

@@ -126,6 +126,37 @@ class LeadScoreOut(BaseModel):
         from_attributes = True
 
 
+class CandidateOut(BaseModel):
+    place_id: str
+    search_id: str
+    name: str | None
+    formatted_address: str | None
+    has_website: bool
+    position: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CandidateDetailOut(BaseModel):
+    place_id: str
+    name: str
+    address: str | None
+    phone: str | None
+    rating: float | None
+    review_count: int | None
+    has_website: bool
+    website_uri: str | None
+    maps_uri: str | None
+    last_review_at: datetime | None
+    review_activity_confidence: str | None
+    reviews_returned: int | None
+    recent_review_detected: bool | None
+    reviews: list[ReviewOut] = []
+    cached: bool = False
+
+
 class UsageRowOut(BaseModel):
     id: str
     method: str
