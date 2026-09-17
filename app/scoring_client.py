@@ -22,13 +22,18 @@ ALLOWED_REASON_CODES = {
 SYSTEM_PROMPT = """Sos un evaluador de leads B2B. Puntás negocios según una rúbrica fija (Ideal Customer Profile).
 
 Rúbrica (máx 100 puntos):
-- Sin sitio web: +30
+- Sin sitio web: +30 (0 si tiene sitio web)
 - Rating alto con volumen real de reseñas (no solo 2 reseñas de 5 estrellas): +25
 - Actividad reciente en reseñas (negocio operativo): +25
 - Rubro que calza con lo que vende la empresa: +20
 
+Regla de techo:
+- Si el negocio TIENE sitio web, su fit_score máximo es 84. Nunca puede ser "hot", a lo sumo "warm".
+  Usá reason_code "has_website" en ese caso.
+- Solo un negocio SIN sitio web y con buen puntaje puede llegar a "hot".
+
 Rangos de decisión:
-- fit_score 85 o más = "hot" (contactar ya)
+- fit_score 85 o más = "hot" (contactar ya) — reservado para SIN sitio web
 - fit_score 60 a 84 = "warm"
 - fit_score menor a 60 = "cold"
 
@@ -36,9 +41,10 @@ Reglas:
 - NO infieras datos faltantes. Si falta un dato (por ejemplo, no hay reseñas recientes),
   asigná 0 al ítem correspondiente y usá el reason_code adecuado.
 - Devolvé SOLO un objeto JSON con este formato exacto:
-{"fit_score": 82, "intent": "hot", "reason_codes": ["no_website", "recent_activity"], "reasoning": "frase corta justificando el score"}
+{"fit_score": 72, "intent": "warm", "reason_codes": ["has_website", "high_rating"], "reasoning": "frase corta justificando el score"}
 - reason_codes válidos: no_website, high_rating, recent_activity, industry_fit,
   has_website, low_review_volume, no_recent_activity, low_rating
+- Si tiene sitio web, incluí obligatoriamente "has_website" en reason_codes.
 - No agregues texto fuera del JSON ni markdown."""
 
 
@@ -139,16 +145,32 @@ class ScoringClient:
         content = data["choices"][0]["message"]["content"]
         return json.loads(content)
 
+    @staticmethod
+    def _enforce_ceiling(result: LeadScoreResult, has_website: bool) -> LeadScoreResult:
+        """Opción 2 con techo: con sitio web nunca puede ser hot, máximo 84 (warm)."""
+        if not has_website:
+            return result
+        codes = list(result.reason_codes)
+        if "has_website" not in codes:
+            codes = ["has_website"] + codes
+        result.reason_codes = codes
+        if result.intent == "hot" or result.fit_score >= 85:
+            result.intent = "warm"
+            result.fit_score = min(result.fit_score, 84)
+        return result
+
     async def score_lead(self, lead_data: dict) -> tuple[LeadScoreResult | None, str, str | None]:
         """Retorna (result, model_usado, error). Error solo si AMBOS modelos fallan."""
         if not self.api_key:
             return None, self.model, "OPENROUTER_API_KEY no configurada"
         user_prompt = build_user_prompt(lead_data)
+        has_website = bool(lead_data.get("has_website"))
         last_err: Exception | None = None
         for model in (self.model, self.fallback_model):
             try:
                 raw = await self.fetch(model, self._headers(), self._body(model, user_prompt))
                 result = parse_and_clamp(raw)
+                result = self._enforce_ceiling(result, has_website)
                 return result, model, None
             except Exception as e:  # noqa: BLE001 - fallback cubre errores de parse y red
                 last_err = e

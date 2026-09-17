@@ -427,23 +427,25 @@ Columnas: `place_id, search_id, zona, categoria, name, address, phone, rating, r
 
 ### 4.13 `GET /api/searches/{search_id}/candidates` — candidatos crudos de una búsqueda
 
-Lista **lo que trajo la búsqueda**, sin consultar el detalle caro. Barato: solo lee la DB.
+Lista **lo que trajo la búsqueda**, sin consultar el detalle caro. Barato: solo lee `search_candidates` en DB, no toca Google ni gasta cupo. Útil para auditar qué vino del Text Search antes de los filtros del Paso 2.
+
+**Auth:** `X-API-Key` requerida.
 
 **Query params:**
 - `page` — int ≥1 (default 1)
 - `limit` — int 1-100 (default 20)
 
-**Respuesta 200:** `list[CandidateOut]` — paginado por `position`:
+**Respuesta 200:** `list[CandidateOut]` — paginado por `position` (orden de Google):
 
 | Campo | Significado |
 |---|---|
 | `place_id` | ID del lugar en Google |
 | `search_id` | búsqueda a la que pertenece |
 | `name` | nombre del negocio (`displayName` del Text Search) |
-| `formatted_address` | dirección |
-| `has_website` | si el Text Search trajo `websiteUri` |
-| `position` | orden en la respuesta de Google |
-| `created_at` | cuándo se guardó |
+| `formatted_address` | dirección (`formattedAddress` del Text Search) |
+| `has_website` | si el Text Search trajo `websiteUri` (Enterprise). `true` → se habría descartado en el embudo si `include_with_website=false` |
+| `position` | orden en la respuesta de Google (0-based) |
+| `created_at` | cuándo se guardó el candidato |
 
 ```json
 [
@@ -458,17 +460,19 @@ Lista **lo que trajo la búsqueda**, sin consultar el detalle caro. Barato: solo
   }
 ]
 ```
-**Errores:** `404` si la búsqueda no existe.
+**Errores:** `401` sin `X-API-Key`, `404` si la búsqueda no existe, `422` si `page`/`limit` fuera de rango.
 
 ---
 
 ### 4.14 `GET /api/candidates/{place_id}` — detalle caro de un candidato (desacoplado)
 
-Trae los datos completos de un candidato usando el **SKU caro** (`Place Details Enterprise+Atmosphere`). Endpoint desacoplado: no está anidado bajo una búsqueda.
+Trae los datos completos de un candidato usando el **SKU caro** (`Place Details Enterprise+Atmosphere`). Endpoint desacoplado: no está anidado bajo una búsqueda, permite inspeccionar cualquier `place_id` visto en `candidates` sin re-correr la búsqueda.
+
+**Auth:** `X-API-Key` requerida.
 
 **Query params:**
 - `promote` — bool (default `false`). Si `true`, intenta promover a lead.
-- `search_id` — requerido si `promote=true`: búsqueda destino para crear el lead. El lead solo se crea si pasa los filtros de esa búsqueda.
+- `search_id` — requerido si `promote=true`: búsqueda destino para crear el lead. El lead solo se crea si pasa los filtros de esa búsqueda (`min_rating`, `max_days_since_review`, `include_with_website`). Upsert idempotente por `place_id` (re-promover actualiza el lead existente, no duplica).
 
 **Respuesta 200 (`CandidateDetailOut`):**
 
@@ -478,8 +482,10 @@ Trae los datos completos de un candidato usando el **SKU caro** (`Place Details 
 | `rating` / `review_count` | rating y total de reviews |
 | `has_website` / `website_uri` / `maps_uri` | contacto |
 | `last_review_at`, `recent_review_detected`, `review_activity_confidence`, `reviews_returned` | actividad de reviews |
-| `reviews` | array de reviews observadas |
-| `cached` | `true` si vino de `PlaceCache` (sin pagar a Google) |
+| `reviews` | array de reviews observadas (hasta 5, `author`/`rating`/`text`/`publish_time`) |
+| `cached` | `true` si vino de `PlaceCache` (caché 7 días, `DETAIL_CACHE_HOURS`, sin pagar a Google). `false` → se pagó `enterprise_atmosphere` |
+
+Semántica de `recent_review_detected` en este endpoint: `true` si existe `last_review_at` (hay al menos una review en el set devuelto), **sin ventana `max_days_since_review`**. Para el `promote`, el filtro de ventana sí se aplica (reciente dentro de `max_days_since_review` de la `search_id`). `review_activity_confidence` (`full`/`partial`/`unknown`) se calcula igual que en `LeadOut` vía `PlacesClient.review_confidence`.
 
 ```json
 {
@@ -501,9 +507,11 @@ Trae los datos completos de un candidato usando el **SKU caro** (`Place Details 
 }
 ```
 
-Si `promote=true` y el candidato pasa los filtros de la `search_id`, además **crea/actualiza el lead** (upsert por `place_id`, con reviews). La respuesta sigue siendo el detalle; el lead queda disponible en `GET /api/searches/{id}/leads`.
+Si `promote=true` y el candidato pasa los filtros de la `search_id`, además **crea/actualiza el lead** (upsert por `place_id`, con `reviews_snapshot`). La respuesta sigue siendo el detalle; el lead queda disponible en `GET /api/searches/{id}/leads` y en `GET /api/leads/{place_id}`. Si no pasa filtros, no se crea lead (respuesta `200` igual, sin side-effect).
 
-**Errores:** `404` (search no encontrado para promover), `502` (Google no respondió).
+**Coste:** `cached=false` consume `enterprise_atmosphere` (1 llamada, `$25/1000` fuera de cupo) y persiste en `place_cache` + `ApiUsage` desacoplado (`search_id=NULL`, `month_key` actual). `cached=true` no consume cupo.
+
+**Errores:** `401` sin `X-API-Key`, `404` si `place_id` no existe en Google o `search_id` no encontrado para promover, `422` si `promote=true` sin `search_id`, `502` (Google no respondió o `PlacesClient.get_details` falló).
 
 ---
 
@@ -555,6 +563,14 @@ do {
 $leads = Invoke-RestMethod -Uri "$base$poll/leads?intent=hot" -Headers $H
 $leads | ForEach-Object { "$($_.name) | fit=$($_.fit_score) | $($_.intent)" }
 
+# 3b. Auditar candidatos y detail desacoplado
+$cands = Invoke-RestMethod -Uri "$base$poll/candidates?page=1&limit=20" -Headers $H
+$cands | ForEach-Object { "$($_.name) | has_website=$($_.has_website) | pos=$($_.position)" }
+$detail = Invoke-RestMethod -Uri "$base/api/candidates/$($cands[0].place_id)" -Headers $H
+"cached=$($detail.cached) rating=$($detail.rating)"
+# Promover si te interesa (si pasa filtros de la search):
+Invoke-RestMethod -Uri "$base/api/candidates/$($cands[0].place_id)?promote=true&search_id=$sid" -Headers $H
+
 # 4. Cambiar status CRM
 Invoke-RestMethod -Method Post -Uri "$base/api/leads/$($leads[0].place_id)/status" -Headers $H `
   -ContentType "application/json" -Body '{"status":"contactado"}'
@@ -574,6 +590,9 @@ curl -s -X POST "$BASE/api/searches" -H "$H" -H "Content-Type: application/json"
 
 curl -s "$BASE/api/searches/{id}" -H "$H"
 curl -s "$BASE/api/searches/{id}/leads?intent=hot&min_fit_score=85" -H "$H"
+curl -s "$BASE/api/searches/{id}/candidates?page=1&limit=20" -H "$H"
+curl -s "$BASE/api/candidates/{place_id}" -H "$H"
+curl -s "$BASE/api/candidates/{place_id}?promote=true&search_id={id}" -H "$H"
 curl -s -X POST "$BASE/api/leads/{place_id}/status" -H "$H" -H "Content-Type: application/json" -d '{"status":"contactado"}'
 curl -s "$BASE/api/usage?month=2026-09" -H "$H"
 ```
@@ -588,6 +607,7 @@ curl -s "$BASE/api/usage?month=2026-09" -H "$H"
 | `poll_url` | ruta relativa para consultar el resultado | no es el resultado en sí |
 | `fit_score` | puntaje LLM 0-100 según rúbrica ICP | no es certeza absoluta |
 | `intent` | `hot` (85+), `warm` (60-84), `cold` (<60) | |
-| `recent_review_detected` | "la API devolvió al menos una review reciente" | **no** significa "el negocio está activo" |
+| `recent_review_detected` | "la API devolvió al menos una review reciente" | **no** significa "el negocio está activo". En `GET /api/candidates/{place_id}` es `last_review_at is not None` (sin ventana); en `leads` y `promote` es dentro de `max_days_since_review` |
 | `review_activity_confidence` | `full` (set cubre todas las reviews) / `partial` / `unknown` | |
-| `est_cost_usd` | costo estimado según cupos del mes | $0 no significa "gratis para siempre" |
+| `cached` | `true` si `PlaceCache` fresco (7 días) | `false` pagó `enterprise_atmosphere` |
+| `est_cost_usd` | costo estimado según cupos del mes | $0 no significa "gratis para siempre". `candidates` desacoplado con `cached=false` suma `enterprise_atmosphere` fuera de cupo |

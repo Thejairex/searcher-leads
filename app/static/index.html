@@ -647,7 +647,7 @@ function renderLeads(leads) {
     <tr>
       <td><div class="cell-name">${esc(l.name)}</div><div class="cell-sub">${esc(l.address || "")}</div></td>
       <td>${l.rating ?? "—"} <span class="faint">(${l.review_count ?? 0})</span></td>
-      <td>${l.has_website ? '<span class="tag tag-hot">sí</span>' : '<span class="tag tag-done">no</span>'}</td>
+      <td>${l.has_website ? '<span class="tag tag-warn">sí</span>' : '<span class="tag tag-done">no</span>'}</td>
       <td>${intentTag(l.intent, l.fit_score)}</td>
       <td><span class="tag tag-default">${esc(l.status)}</span></td>
       <td><details><summary>${l.reviews.length} reviews</summary><div class="reviews-box">${renderReviews(l)}</div></details></td>

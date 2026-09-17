@@ -48,6 +48,15 @@ LEAD guardado + reviews snapshot
 
 **Por qué ahorra plata:** el Paso 1 cuesta ~$0.0017 por candidato (una consulta trae muchos), mientras que cada Paso 2 cuesta ~$0.025 por candidato. Al descartar los que tienen web **antes** del Paso 2, evitás pagar el detalle caro de negocios que nunca iban a servir. En la corrida real: **20 candidatos → 3 leads**, se pagaron solo 3 detalles caros en vez de 20.
 
+### 2.1 Candidatos crudos y detail desacoplado (nuevo)
+
+Desde `d2e8032` el Text Search persiste **todos** los candidatos en `search_candidates` (`place_id`, `name`, `formatted_address`, `has_website`, `position`), antes del filtrado caro. Esto habilita:
+
+- `GET /api/searches/{id}/candidates` — lista lo que trajo Google para esa corrida, barato (solo DB, paginado por `position`), sin tocar Place Details.
+- `GET /api/candidates/{place_id}` — trae el detail completo de un candidato suelto (SKU caro `Enterprise+Atmosphere`), reutilizando `PlaceCache` (7 días) si está fresco (`cached=true` no paga, `cached=false` paga y guarda caché). Desacoplado de la búsqueda: no necesita `search_id` salvo que quieras `?promote=true&search_id={id}`.
+
+`promote` hace upsert idempotente a `leads` por `place_id` si el candidato pasa los filtros de esa `search_id` (`min_rating`, `max_days_since_review`, `include_with_website`). Permite rescatar manualmente un candidato que el embudo automático descartó (ej. revisar un `has_website=true` o un `rating` límite) sin re-correr la búsqueda.
+
 ---
 
 ## 3. Filtros y la semántica honesta de las reviews
@@ -134,6 +143,7 @@ POST /api/searches
   └─ WORKER (background)
      ├─ status="running"
      ├─ PASO 1: Text Search → candidatos con has_website
+     │         └─ Guarda cada candidato en search_candidates (position)
      ├─ Por cada candidato:
      │    ├─ ¿web? → discarded_has_website++
      │    ├─ ¿caché fresco? → reused_from_cache++, sin llamar a Google
@@ -149,6 +159,14 @@ POST /api/searches
 
 El cliente hace **polling** con `GET /api/searches/{id}` hasta ver `status: done`.
 
+**Rama desacoplada (sin worker, bajo demanda):**
+```
+GET /api/searches/{id}/candidates          ← barato, DB, lista lo que trajo la corrida
+GET /api/candidates/{place_id}             ← caro, desacoplado, Place Details + caché
+GET /api/candidates/{place_id}?promote=true&search_id={id}  ← upsert a leads si pasa filtros de esa search
+```
+Útil para auditar por qué un candidato no llegó a lead (tinha web, rating, review) y rescatarlo manualmente sin re-correr toda la búsqueda.
+
 ---
 
 ## 7. Modelo de datos
@@ -156,15 +174,16 @@ El cliente hace **polling** con `GET /api/searches/{id}` hasta ver `status: done
 | Tabla | Qué guarda |
 |---|---|
 | `searches` | cada corrida: zona, categoría, filtros, estado, contadores de costo/descarte/scoring |
+| `search_candidates` | candidatos crudos del Text Search por corrida (`place_id`, `name`, `formatted_address`, `has_website`, `position`). Base para `GET /api/searches/{id}/candidates` |
 | `leads` | negocios cualificados (PK `place_id`), datos, score LLM denormalizado, status CRM |
 | `reviews_snapshot` | hasta 5 reviews observadas por lead (trazabilidad del filtro de actividad) |
-| `api_usage` | **una fila por llamada HTTP a Google** (método, SKU, status, latencia, mes) |
-| `place_cache` | Place Details crudos (7 días) para no re-pagar |
+| `api_usage` | **una fila por llamada HTTP a Google** (método, SKU, status, latencia, mes). Calls desacoplados de `GET /api/candidates/{place_id}` quedan con `search_id=NULL` (mes actual) |
+| `place_cache` | Place Details crudos (7 días) para no re-pagar. Reusado por `GET /api/candidates/{place_id}` (`cached` flag) |
 | `lead_scores` | historial de scores LLM por lead/modelo (auditable) |
 | `webhook_deliveries` | intentos de notificación al cerrar una corrida (done/failed) |
 | `api_clients` | consumidores con API key (auth) |
 
-Dedupe natural: `leads` usa `place_id` como PK; re-correr una zona actualiza los leads existentes en vez de duplicarlos.
+Dedupe natural: `leads` usa `place_id` como PK; re-correr una zona actualiza los leads existentes en vez de duplicarlos. `search_candidates` es append por corrida (un `place_id` puede aparecer en varias búsquedas, único por `search_id`).
 
 ---
 
@@ -189,6 +208,7 @@ Cada lead tiene un `status` que el equipo comercial maneja:
 - **`radio` requiere `lat`/`lng`** — funciona con `locationBias.circle` (centro + radio); sin coordenadas el radio se ignora.
 - **BackgroundTasks en proceso** — sirve para un solo worker; si se necesita más escala, migrar a Celery + Redis + Postgres (la lógica ya está desacoplada para eso).
 - **Una API key única para consumidores** — sin rate limiting por key aún.
+- **`promote` es `GET` con side-effect** — `GET /api/candidates/{place_id}?promote=true` hace upsert (idempotente por `place_id`). No es REST puro, se documenta como tal; futuro puede migrar a `POST`.
 
 ### Búsquedas más precisas (`includedType`)
 
@@ -236,20 +256,28 @@ Supongamos: *"quiero leads de tecnología en Buenos Aires"*.
    Resultado: 20 candidatos → 3 leads, 1 Text Search + 3 Place Details, $0.0,
    scored_leads: 3, score_errors: 0
 
-3. Ver los leads
+3. Auditar candidatos (nuevo)
+   GET /api/searches/359293cb-.../candidates
+   → 20 candidatos crudos con has_website/position (barato, DB)
+   GET /api/candidates/{place_id}
+   → detail caro desacoplado (cached flag). Si un candidato con web te interesa:
+   GET /api/candidates/{place_id}?promote=true&search_id=359293cb-...
+   → upsert a leads si pasa filtros
+
+4. Ver los leads
    GET /api/searches/359293cb-.../leads?intent=hot
    → los leads hot (fit_score ≥ 85) listos para ventas
 
-4. Revisar un lead
+5. Revisar un lead
    GET /api/leads/{place_id}
    → datos, reviews, fit_score, intent, confidence
 
-5. Equipo comercial
+6. Equipo comercial
    POST /api/leads/{place_id}/status  {"status":"contactado"}
 
-6. Control de gasto
+7. Control de gasto
    GET /api/usage?month=2026-09
-   → text_search_enterprise: 1/1000 gratis, enterprise_atmosphere: 3/1000 gratis, total $0
+   → text_search_enterprise: 1/1000 gratis, enterprise_atmosphere: 3/1000 (+1 si usaste candidates detail sin caché), total $0
 ```
 
-Ese es el ciclo completo: **buscar → filtrar → puntuar → vender → controlar el costo**.
+Ese es el ciclo completo: **buscar → auditar candidatos → filtrar → puntuar → vender → controlar el costo**.
